@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虛擬環境
+venv/
+ENV/
+env/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 模型文件
+models--lianghsun--Llama-3.2-Taiwan-3B-Instruct/
+Llama-3.2-Taiwan-3B-Instruct/
+
+# 日誌
+*.log
+
+# 系統文件
+.DS_Store
+Thumbs.db 
