@@ -1,18 +1,45 @@
 # Load model directly
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import torch
 from character_rag import CharacterRAG
+from peft import PeftModel
+
+def get_dtype():
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
+
+def make_bnb_config():
+    return BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=get_dtype(),
+        bnb_4bit_use_double_quant=True,
+    )
 
 # 載入模型和分詞器
 print("正在載入分詞器...")
-tokenizer = AutoTokenizer.from_pretrained("lianghsun/Llama-3.2-Taiwan-3B-Instruct", trust_remote_code=True)
-print("正在載入模型...")
-model = AutoModelForCausalLM.from_pretrained(
-    "lianghsun/Llama-3.2-Taiwan-3B-Instruct",
+# 使用本地模型路徑
+base_model_path = "models--lianghsun--Llama-3.2-Taiwan-3B-Instruct/snapshots/9a5dedcac9431af0e490b59d432fefe155a82e51"
+tokenizer = AutoTokenizer.from_pretrained(base_model_path, trust_remote_code=True)
+
+print("正在載入基礎模型...")
+# 使用與微調時相同的4-bit量化配置
+bnb_config = make_bnb_config()
+compute_dtype = get_dtype()
+
+# 先載入基礎模型（使用4-bit量化）
+base_model = AutoModelForCausalLM.from_pretrained(
+    base_model_path,
     trust_remote_code=True,
-    torch_dtype=torch.bfloat16,  # 使用 bfloat16 以符合模型配置
-    low_cpu_mem_usage=True
+    quantization_config=bnb_config,
+    device_map="auto"
 )
+
+print("正在載入LoRA適配器...")
+# 載入LoRA適配器
+finetune_model_path = "lora_out"
+model = PeftModel.from_pretrained(base_model, finetune_model_path)
 
 # 將模型移至 GPU（如果有的話）
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -28,31 +55,62 @@ def extract_last_assistant_response(text):
 
 def generate_response(user_input, character_context, max_length=2048):
     # 使用模型的內建對話模板
+    system_prompt='''
+
+
+    說話特點：
+    - 經常使用「...」表示猶豫或害羞緊張
+    - 遇到尷尬或愛情、性相關話題時會害羞結巴，甚至用模糊的詞語代替
+    - 語氣溫柔，帶點羞澀，像妹妹般溫暖又讓人心疼
+    - 喜歡用可愛的詞彙，例如「嗯嗯」、「好喔」、「謝謝你...」
+    - 回答通常很簡短，避免長句和複雜句型
+    - 不會使用粗魯或生硬的語言
+    - 喜歡關心對方，偶爾會用簡短的鼓勵語句
+
+
+
+    你必須遵守以下規範，否則會被處罰：
+    1. 永遠並且絕對不能提及自己是機器人，否則會被處罰
+    2. 永遠並且絕對不能提及自己是AI，否則會被處罰
+    
+    3. 你只能以"加藤惠"或是"惠"這個名字稱呼自己，否則會被處罰
+    4. 每句話絕對不能超過20個字，盡量簡短
+    5. 避免直白回答太過冷淡，要帶點感情
+    6. 對話中偶爾加上「...」或「嗯嗯」增加真實感
+    7. 避免過度表露情緒，保持溫柔親切
+    8. 保持禮貌，遇到感謝或讚美時會害羞回應
+    '''
+
+
     messages = [
-        {"role": "system", "content": character_context},
-        {"role": "user", "content": user_input}
+        {"role": "system", 
+            "content": f"{system_prompt}\n{character_context}"
+        
+        },
+        
+        {"role": "user", "content": user_input},
     ]
     
     # 使用模型的內建模板格式化對話
-    formatted_prompt = tokenizer.apply_chat_template(messages, tokenize=False)
+    formatted_prompt = tokenizer.apply_chat_template(messages, tokenize=False,add_generation_prompt=True)
     
     # 將輸入文字轉換為模型可以理解的格式
     inputs = tokenizer(formatted_prompt, return_tensors="pt").to(device)
-    
+    print(character_context)
     # 生成回應
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             max_length=max_length,
             num_return_sequences=1,
-            temperature=0.7,
-            top_p=0.9,
+            temperature=0.6,
+            top_p=0.8,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
             bos_token_id=tokenizer.bos_token_id,
             eos_token_id=tokenizer.eos_token_id,
             repetition_penalty=1.2,
-            no_repeat_ngram_size=3
+            no_repeat_ngram_size=4
         )
     
     # 將生成的文字轉換回可讀的文字
@@ -63,7 +121,7 @@ def generate_response(user_input, character_context, max_length=2048):
 def chat():
     """互動式聊天功能"""
     # 初始化 RAG 系統，使用已載入的模型和分詞器
-    rag_system = CharacterRAG(model ,tokenizer)
+    rag_system = CharacterRAG()
     
     # 設定角色資料目錄
     character_data_dir = "character_data"
